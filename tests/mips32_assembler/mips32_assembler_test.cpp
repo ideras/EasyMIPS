@@ -137,7 +137,7 @@ public:
         ra(ctx.reg_file.getRegArray()[Reg::Ra]),
         hi(ctx.reg_file.getRegArray()[Reg::Hi]),
         lo(ctx.reg_file.getRegArray()[Reg::Lo]),
-        pc(ctx.pc)
+        pc(ctx.reg_file.getRegArray()[Reg::Pc])
         {}
 
 public:

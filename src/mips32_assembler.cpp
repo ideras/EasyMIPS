@@ -332,27 +332,27 @@ namespace Mips32::Assembler
             case Opcode::Jalr:
                 return [arg1](RuntimeContext& ctx)
                 {
-                    ctx.reg_file.setReg(RegIndex::Ra, ctx.pc);
-                    ctx.pc = ctx.reg_file[arg1];
+                    ctx.reg_file.setReg(RegIndex::Ra, ctx.getPC());
+                    ctx.setPC(ctx.reg_file[arg1]);
                     return ErrorCode::Ok;
                 };
             case Opcode::Jr:
                 return [arg1](RuntimeContext& ctx)
                 {
-                    ctx.pc = ctx.reg_file[arg1];
+                    ctx.setPC(ctx.reg_file[arg1]);
                     return ErrorCode::Ok;
                 };
             case Opcode::J:
                 return [arg1](RuntimeContext& ctx)
                 {
-                    ctx.pc = arg1;
+                    ctx.setPC(arg1);
                     return ErrorCode::Ok;
                 };
             case Opcode::Jal:
                 return [arg1](RuntimeContext& ctx)
                 {
-                    ctx.reg_file.setReg(RegIndex::Ra, ctx.pc);
-                    ctx.pc = arg1;
+                    ctx.reg_file.setReg(RegIndex::Ra, ctx.getPC());
+                    ctx.setPC(arg1);
                     return ErrorCode::Ok;
                 };
             case Opcode::Mfhi:
@@ -429,7 +429,7 @@ namespace Mips32::Assembler
                     int32_t rd1 = static_cast<int32_t>(ctx.reg_file[arg1]);
 
                     if (rd1 < 0)
-                        ctx.pc = arg2;
+                        ctx.setPC(arg2);
 
                     return ErrorCode::Ok;
                 };
@@ -439,7 +439,7 @@ namespace Mips32::Assembler
                     int32_t rd1 = static_cast<int32_t>(ctx.reg_file[arg1]);
 
                     if (rd1 >= 0)
-                        ctx.pc = arg2;
+                        ctx.setPC(arg2);
 
                     return ErrorCode::Ok;
                 };
@@ -449,7 +449,7 @@ namespace Mips32::Assembler
                     int32_t rd1 = static_cast<int32_t>(ctx.reg_file[arg1]);
 
                     if (rd1 <= 0)
-                        ctx.pc = arg2;
+                        ctx.setPC(arg2);
 
                     return ErrorCode::Ok;
                 };
@@ -459,7 +459,7 @@ namespace Mips32::Assembler
                     int32_t rd1 = static_cast<int32_t>(ctx.reg_file[arg1]);
 
                     if (rd1 > 0)
-                        ctx.pc = arg2;
+                        ctx.setPC(arg2);
 
                     return ErrorCode::Ok;
                 };
@@ -494,7 +494,7 @@ namespace Mips32::Assembler
                 return [arg1, arg2, arg3](RuntimeContext& ctx)
                 {
                     if (ctx.reg_file[arg1] == ctx.reg_file[arg2])
-                        ctx.pc = arg3;
+                        ctx.setPC(arg3);
 
                     return ErrorCode::Ok;
                 };
@@ -502,7 +502,7 @@ namespace Mips32::Assembler
                 return [arg1, arg2](RuntimeContext& ctx)
                 {
                     if (ctx.reg_file[arg1] == 0)
-                        ctx.pc = arg2;
+                        ctx.setPC(arg2);
 
                     return ErrorCode::Ok;
                 };
@@ -510,7 +510,7 @@ namespace Mips32::Assembler
                 return [arg1, arg2, arg3](RuntimeContext& ctx)
                 {
                     if (ctx.reg_file[arg1] != ctx.reg_file[arg2])
-                        ctx.pc = arg3;
+                        ctx.setPC(arg3);
 
                     return ErrorCode::Ok;
                 };
@@ -518,7 +518,7 @@ namespace Mips32::Assembler
                 return [arg1, arg2](RuntimeContext& ctx)
                 {
                     if (ctx.reg_file[arg1] != 0)
-                        ctx.pc = arg2;
+                        ctx.setPC(arg2);
 
                     return ErrorCode::Ok;
                 };

@@ -210,7 +210,7 @@ namespace Mips32
                              VirtualAddr entry_point,
                              VirtualAddr initial_ra)
     {
-        rt_ctx->pc = entry_point;
+        rt_ctx->setPC(entry_point);
         rt_ctx->reg_file.setReg(RegIndex::Ra, initial_ra);
 
         VirtualAddr last_pc = 0x400000 + action_v.size() * 4;
@@ -218,18 +218,18 @@ namespace Mips32
 
         do
         {
-            unsigned idx = (rt_ctx->pc - 0x400000) / 4;
+            unsigned idx = (rt_ctx->getPC() - 0x400000) / 4;
 
             if (idx > action_v.size() - 1)
             {
                 last_error = EAsm::Error("Runtime error: Invalid instruction address ",
-                                         cboldText(fcolor::red, Cvt::hexVal(rt_ctx->pc)),
+                                         cboldText(fcolor::red, Cvt::hexVal(rt_ctx->getPC())),
                                          '\n');
 
                 return 1;
             }
             VmOperation act = action_v[idx];
-            rt_ctx->pc += 4;
+            rt_ctx->setPC(rt_ctx->getPC() + 4);
 
             if (act.task == nullptr)
             {
@@ -238,7 +238,6 @@ namespace Mips32
             }
 
             ErrorCode ecode = act.task(*rt_ctx);
-            rt_ctx->reg_file.setReg(RegIndex::Pc, rt_ctx->pc);
             inst_count++;
 
             if (ecode == ErrorCode::Stop)
@@ -253,7 +252,7 @@ namespace Mips32
 
                 return 2;
             }
-        } while (rt_ctx->pc < last_pc);
+        } while (rt_ctx->getPC() < last_pc);
 
         return 0;
     }

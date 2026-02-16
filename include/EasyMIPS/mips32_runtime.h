@@ -208,8 +208,13 @@ namespace Mips32
 
         EAsm::ErrorPair validateAddr(VirtualAddr vaddr, size_t wcount, WordSize ws);
 
+        VirtualAddr getPC() const
+        { return reg_file[RegIndex::Pc]; }
+
+        void setPC(VirtualAddr addr)
+        { reg_file.setReg(RegIndex::Pc, addr); }
+
         RegFile reg_file;
-        VirtualAddr pc;
         MemoryManager* mm;
         SyscallHandler ext_syscall_handler;
         std::ostream& out;

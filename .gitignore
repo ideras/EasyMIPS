@@ -26,8 +26,8 @@ history.txt
 Thumbs.db
 
 # Executables
-EasyMIPS
-EasyMIPS.exe
+/EasyMIPS
+/EasyMIPS.exe
 test-*
 
 # AI Docs

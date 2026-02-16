@@ -126,8 +126,12 @@ namespace Mips32
                 std::getline(std::cin, input);
 
                 auto it = mm->memIter<char>(vaddr);
-                for (char ch : input)
-                    *it++ = ch;
+                size_t copy_len = std::min(input.length(), len - 1);
+
+                for (size_t i = 0; i < copy_len; ++i)
+                    *it++ = input[i];
+
+                *it = '\0';
 
                 break;
             }

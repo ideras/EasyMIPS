@@ -1,0 +1,500 @@
+%option lang = "C++"
+%option reentrant
+%option namespace = "Mips32::Ast"
+
+%decls %{
+
+#include <sstream>
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <algorithm>
+#include "sim_runtime.h"
+#include "num_convert.h"
+#include "mips32_ast.h"
+#include "mips32_assembler.h"
+
+using StdString = std::string;
+namespace Asm = Mips32::Assembler;
+
+namespace Mips32::Ast
+{
+
+    class Node;
+    class NodeList;
+    class Stmt;
+    class AsmEntry;
+    class Arg;
+    class DataArg;
+
+    using NodeVector = std::vector<Node *>;
+    using StmtVector = std::vector<Stmt *>;
+    using AsmEntryVector = std::vector<AsmEntry *>;
+    using ArgVector = std::vector<Arg *>;
+    using DataArgVector = std::vector<DataArg *>;
+    using LabelMap = std::unordered_map<std::string, AsmEntry *>;
+    using AsmArg = Mips32::Assembler::Arg;
+    using AsmGlobalData = Mips32::Assembler::GlobalData;
+    using CvtFormat = Cvt::Format;
+    using EAsmSrcInfo = EAsm::SrcInfo;
+
+    struct CompileState 
+    {
+        CompileState(VirtualAddr vi_addr, VirtualAddr vd_addr)
+        : vi_addr(vi_addr), vd_addr(vd_addr),
+          section(Asm::Section::None), data_size(0) 
+        {}
+
+        VirtualAddr vi_addr;
+        VirtualAddr vd_addr;
+        Asm::Section section;
+        size_t data_size;
+        LabelMap global_lbl;
+    };
+
+    template <typename TNode>
+    TNode *node_cast(Node *node)
+    { return reinterpret_cast<TNode *>(node); }
+}
+
+%}
+
+
+%{
+#include "colorizer.h"
+#include "mips32_ast.h"
+#include "mips32_assembler.h"
+#include "easm_error.h"
+
+namespace Mips32::Ast
+{
+
+    template <typename T>
+    std::string vectorToString(const std::vector<T>& vtr, const char *sep)
+    {
+        std::ostringstream ss;
+
+        bool first = true;
+        for (auto const elem : vtr) {
+            if (first) first = false;
+            else ss << sep;
+            
+            ss << elem->toString();
+        }
+
+        return ss.str();
+    }
+
+} // namespace Mips32::Ast
+
+%}
+
+%node Node %abstract %typedef
+
+%node NodeList Node = {
+    NodeVector ctr;
+}
+
+%node String Node = {
+    StdString s_val;
+}
+
+%node AsmEntry Node %abstract = {
+    %nocreate VirtualAddr virtual_addr;
+}
+
+%node AsmProgram Node = {
+    AsmEntryVector asm_entries;
+
+    %nocreate VirtualAddr virtual_addr;
+    %nocreate LabelMap local_lbl;
+    %nocreate AsmGlobalData gdata;
+}
+
+%node LabelEntry AsmEntry = {
+    StdString s_label;
+}
+
+%node Directive AsmEntry %abstract
+
+%node SectionData Directive
+%node SectionText Directive
+
+%node GlobalDir Directive = {
+    StdString s_label;
+}
+
+%node DataDef Directive %abstract = {
+    %nocreate size_t size;
+}
+
+%node DataArg Node %abstract
+
+%node ConstDataArg DataArg %abstract = {
+    StdString s_val;
+}
+
+%node DecConstDataArg ConstDataArg
+%node HexConstDataArg ConstDataArg
+%node BinConstDataArg ConstDataArg
+%node CharLiteralDataArg ConstDataArg
+
+%node StrLiteralDataArg DataArg = {
+    StdString s_val;
+}
+
+%node FillDataArg DataArg = {
+    ConstDataArg *n_val;
+    ConstDataArg *n_repeat;
+}
+
+%node DataArgList DataArg = {
+    DataArgVector args;
+}
+
+%node ByteData DataDef = {
+    DataArgList *n_args;
+}
+
+%node HWordData DataDef = {
+    DataArgList *n_args;
+}
+
+%node WordData DataDef = {
+    DataArgList *n_args;
+}
+
+%node Stmt AsmEntry %abstract
+
+%node Inst Stmt = {
+    StdString name;
+    Arg *n_args;
+}
+
+%node Cmd Stmt %abstract
+
+%node ShowCmd Cmd = {
+    Arg *n_arg;
+    Arg *n_sep;
+    ShowFormat fmt;
+}
+
+%node SetCmd Cmd = {
+    Arg *n_larg;
+    Arg *n_rarg;
+}
+
+%node ExecCmd Cmd = {
+    Node *n_str;
+}
+
+%node ResetCmd Cmd
+%node StopCmd Cmd
+%node EmptyStmt Stmt
+
+%enum SizeSpec = {
+    SS_Byte,
+    SS_HWord,
+    SS_Word,
+    SS_Empty
+}
+
+%enum ShowFormat = {
+    Fmt_Hex,
+    Fmt_Dec,
+    Fmt_SDec,
+    Fmt_UDec,
+    Fmt_Bin,
+    Fmt_Auto,
+    Fmt_Ascii,
+}
+
+%node Arg Node %abstract
+
+%node ArgList Arg = {
+    ArgVector args;
+}
+
+%node EmptyArg Arg
+
+%node Reg Arg %abstract
+
+%node RegName Reg = {
+    StdString name;
+}
+
+%node RegIndex Reg = {
+    StdString s_index;
+}
+
+%node BaseOffset Arg = {
+    Node *n_ofs;
+    Node *n_base;
+}
+
+%node MemRef Arg = {
+    SizeSpec sz_spec;
+    Arg *n_size;
+    Arg *n_addr;
+}
+
+%node StrLiteral Arg = {
+    StdString s_val;
+}
+
+%node Immediate Arg %abstract
+
+%node Const Immediate %abstract = {
+    StdString s_val;
+}
+
+%node DecConst Const
+%node HexConst Const
+%node BinConst Const
+%node CharLiteral Const
+
+%node Ident Immediate = {
+    StdString s_val;
+}
+
+%node Func Immediate %abstract
+
+%node HiHw Func = {
+    Node *n_arg;
+}
+
+%node LoHw Func = {
+    Node *n_arg;
+}
+
+%operation %virtual StdString toString(Node *this);
+
+toString(Node) {
+    return "";
+}
+
+toString(AsmProgram) {
+    return vectorToString(asm_entries, "\n");
+}
+
+toString(StrLiteral) {
+    return "\"" + s_val + "\"";
+}
+
+toString(String) {
+    return s_val;
+}
+
+toString(SectionData) {
+    return ".data";
+}
+
+toString(SectionText) {
+    return ".text";
+}
+
+toString(GlobalDir) {
+    return ".global " + s_label;
+}
+
+toString(ByteData) {
+    return ".byte " + n_args->toString();
+}
+
+toString(HWordData) {
+    return ".hword " + n_args->toString();
+}
+
+toString(WordData) {
+    return ".word " + n_args->toString();
+}
+
+toString(ConstDataArg) {
+    return s_val;
+}
+
+toString(CharLiteralDataArg) {
+    return "'" + s_val + "'";
+}
+
+toString(StrLiteralDataArg) {
+    return "\"" + s_val + "\"";
+}
+
+toString(FillDataArg) {
+    return ".fill(" + n_val->toString() + "," + n_repeat->toString() + ")";
+}
+
+toString(DataArgList) {
+    return vectorToString(args, ",");
+}
+
+toString(Inst) {
+    return name + " " + n_args->toString();
+}
+
+toString(LabelEntry) {
+    return s_label;
+}
+
+toString(ShowCmd) {
+    std::string str = "#show " + n_arg->toString();
+    
+    if (!n_sep->isA(EmptyArg_kind))
+        str += " sep=" + n_sep->toString();
+
+    if (fmt != Fmt_Auto)
+        str += " " + fmtToStr(fmt);
+
+    return str;
+}
+
+toString(SetCmd) {
+    std::string str = "#set " + n_larg->toString() + "=";
+    if (n_rarg->isA(ArgList_kind)) {
+        str += "[" + n_rarg->toString() + "]";
+    } else {
+        str += n_rarg->toString();
+    }
+
+    return str;
+}
+
+toString(ExecCmd) {
+    return "#exec " + n_str->toString();
+}
+
+toString(StopCmd) {
+    return "#stop";
+}
+
+toString(ArgList) {
+    return vectorToString(args, ",");
+}
+
+toString(RegName) {
+    return name;
+}
+
+toString(RegIndex) {
+    return s_index;
+}
+
+toString(MemRef) {
+    std::string str;
+
+    if (sz_spec != SS_Empty)
+        str = sizeSpecToStr(sz_spec);
+
+    str += " " + n_addr->toString();
+    
+    if (!n_size->isA(EmptyArg_kind))
+        str += ":" + n_size->toString();
+
+    return str;
+}
+
+toString(BaseOffset) {
+    return n_ofs->toString() + "(" + n_base->toString() + ")";
+}
+
+toString(Const) {
+    return s_val;
+}
+
+toString(CharLiteral) {
+    return "'" + s_val + "'";
+}
+
+toString(Ident) {
+    return s_val;
+}
+
+toString(HiHw) {
+    return "#hihw(" + n_arg->toString() + ")";
+}
+
+toString(LoHw) {
+    return "#lohw(" + n_arg->toString() + ")";
+}
+
+// Compile method
+%include "mips32_ast_compile.tc"
+
+%decls %end %{
+
+    namespace Mips32::Ast
+    {
+        class NodePool: public YYNODESTATE
+        {
+        public:
+            NodePool() = default;
+            
+            NodePool(const char *fname, long line_num)
+            : fname(fname), line_num(line_num)
+            {}
+
+            const char *currFilename() const override {
+                return fname;
+            }
+
+            long currLinenum() const override {
+                return line_num;
+            }
+
+            void setCurrFilename(const char *fname__) {
+                fname = fname__;
+            }
+
+            void setCurrLinenum(long line__) {
+                line_num = line__;
+            }
+
+        private:
+            const char *fname;
+            long line_num;
+        };
+
+        inline EAsm::SrcInfo nodeSrcInfo(Node *n)
+        { return EAsm::SrcInfo(n->getFilename(), n->getLinenum()); }
+
+        inline WordSize getWordSize(SizeSpec sz_spec)
+        {
+            switch (sz_spec)
+            {
+                case SS_Byte: return WordSize::_8Bit;;
+                case SS_HWord: return WordSize::_16Bit;;
+                case SS_Word: return WordSize::_32Bit;;
+                default:
+                    return WordSize::_32Bit;;
+            }   
+        }
+
+        inline std::string sizeSpecToStr(SizeSpec sz_spec)
+        {
+            switch (sz_spec)
+            {
+                case SS_Byte: return "byte";
+                case SS_HWord: return "hword";
+                case SS_Word: return "word";
+                default:
+                    return "";
+            }
+        }
+
+        inline std::string fmtToStr(ShowFormat fmt)
+        {
+            switch (fmt)
+            {
+                case Fmt_Hex:   return "hex";
+                case Fmt_Dec:   return "decimal";
+                case Fmt_SDec:  return "signed decimal";
+                case Fmt_UDec:  return "unsigned decimal";
+                case Fmt_Bin:   return "binary";
+                case Fmt_Ascii: return "ascii";
+                default:
+                    return "";
+            }
+        }
+    }
+%}

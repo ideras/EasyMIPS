@@ -1,0 +1,1480 @@
+%operation %virtual void resolveLabels(AsmProgram *this, CompileState& cst);
+%operation %virtual void compile(AsmProgram *this, CompileState& cst, VmOperationVector& vmoper_v);
+
+%operation void mapToAddress(AsmEntry *node, AsmProgram *prg, CompileState& cst);
+
+%operation OptVmOperation compileEntry(AsmEntry *n_entry, AsmProgram *prg,
+    CompileState& cst, const EAsmSrcInfo& src_info) = {std::nullopt};
+
+%operation TaskFunction compileShowCmd(Arg *n_arg, const StdString& sep, ShowFormat sfmt,
+                               AsmProgram *prg, const CompileState& cst, const EAsmSrcInfo& src_info) = {nullptr};
+
+%operation TaskFunction compileSetCmd([Arg *n_argl], [Arg *n_argr], AsmProgram *prg,
+    const CompileState& cst, const EAsmSrcInfo& src_info) = {nullptr};
+
+%operation AsmArg compileArg(Arg *n_arg, AsmProgram *prg,
+                             const CompileState& cst) = {Asm::Arg()};
+
+%operation unsigned getDataArgSize(DataArg *arg, unsigned word_size) = {0};
+
+%operation void compileDataArg(DataArg *arg, AsmProgram *prg,
+                               CompileState& cst, unsigned word_size);
+
+%operation %virtual uint32_t getConstDataArgValue(ConstDataArg *arg) = {0};
+%operation %virtual unsigned argCount(Arg *this) = {0};
+%operation %virtual uint32_t getImmValue(Immediate *this, const AsmProgram *prg, const CompileState& cst) = {0};
+%operation CvtFormat getCvtFormat([ShowFormat fmt]) = {Cvt::Format::UDecimal};
+%operation %virtual unsigned getRegIndex(Reg *this) = {0};
+
+// mapToAddress operation
+mapToAddress(AsmEntry)
+{ node->virtual_addr = 0x0; }
+
+mapToAddress(SectionData)
+{
+    node->virtual_addr = 0x0;
+    cst.section = Asm::Section::Data;
+}
+
+mapToAddress(SectionText)
+{
+    node->virtual_addr = 0x0;
+    cst.section = Asm::Section::Code;
+}
+
+mapToAddress(Stmt)
+{
+    if (cst.section == Asm::Section::Data)
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ node->getFilename(), node->getLinenum() },
+                   " A statement cannot appear under the .data section\n");
+    }
+    node->virtual_addr = cst.vi_addr;
+    cst.vi_addr += 4;
+}
+
+mapToAddress(EmptyStmt)
+{
+    if (cst.section == Asm::Section::Data)
+        node->virtual_addr = cst.vd_addr;
+    else
+        node->virtual_addr = cst.vi_addr;
+}
+
+mapToAddress(LabelEntry)
+{
+    std::string lbl_txt(node->s_label.begin(), node->s_label.end() - 1);
+    auto it = prg->local_lbl.find(lbl_txt);
+
+    if (it != prg->local_lbl.end())
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ node->getFilename(), node->getLinenum() },
+                   "Label ", cboldText(fcolor::red, lbl_txt),
+                   " is duplicated. Previous declaration is in line ",
+                   cboldText(fcolor::yellow, it->second->getLinenum()),
+                   '\n');
+    }
+    node->virtual_addr = 0x0;
+    prg->local_lbl.emplace(lbl_txt, node);
+}
+
+mapToAddress(ByteData)
+{
+    if (cst.section != Asm::Section::Data)
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ node->getFilename(), node->getLinenum() },
+                   "Data directive ", colorText(fcolor::blue, ".byte"),
+                   " must appear under .data section\n");
+    }
+    node->size = getDataArgSize(node->n_args, 8);
+    node->virtual_addr = cst.vd_addr;
+    cst.vd_addr += node->size;
+    cst.data_size += node->size;
+}
+
+mapToAddress(HWordData)
+{
+    if (cst.section != Asm::Section::Data)
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ node->getFilename(), node->getLinenum() },
+                   "Data directive ", colorText(fcolor::blue, ".hword"),
+                   " must appear under .data section\n");
+    }
+    node->size = getDataArgSize(node->n_args, 16);
+
+    VirtualAddr vaddr = cst.vd_addr;
+    cst.vd_addr = ((cst.vd_addr + 1) / 2) * 2;
+    node->virtual_addr = cst.vd_addr;
+    cst.vd_addr += node->size;
+    cst.data_size += (cst.vd_addr - vaddr);
+}
+
+mapToAddress(WordData)
+{
+    if (cst.section != Asm::Section::Data)
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ node->getFilename(), node->getLinenum() },
+                   "Data directive ", colorText(fcolor::blue, ".word"),
+                   " must appear under .data section\n");
+    }
+    node->size = getDataArgSize(node->n_args, 32);
+
+    VirtualAddr vaddr = cst.vd_addr;
+    cst.vd_addr = ((cst.vd_addr + 3) / 4) * 4;
+    node->virtual_addr = cst.vd_addr;
+    cst.vd_addr += node->size;
+    cst.data_size += (cst.vd_addr - vaddr);
+}
+// End of mapToAddress operation
+
+// resolveLabels operation
+resolveLabels(AsmProgram)
+{
+    virtual_addr = cst.vd_addr;
+    for (const auto aent : asm_entries)
+    {
+        mapToAddress(aent, this, cst);
+    }
+
+    std::vector<std::pair<std::string, long>> global_lbl_v;
+
+    Asm::Section curr_section = Asm::Section::None;
+    auto it = asm_entries.begin();
+    while (it != asm_entries.end())
+    {
+        AsmEntry *ent = *it;
+        switch (ent->getKind())
+        {
+            case GlobalDir_kind:
+            {
+                GlobalDir *gd = node_cast<GlobalDir>(ent);
+
+                gd->virtual_addr = 0x0;
+                global_lbl_v.emplace_back(gd->s_label, gd->getLinenum());
+                break;
+            }
+            case SectionData_kind:
+                curr_section = Asm::Section::Data;
+                break;
+            case SectionText_kind:
+                curr_section = Asm::Section::Code;
+                break;
+            case LabelEntry_kind:
+            {
+                std::vector<LabelEntry *> lbls;
+                do {
+                    ent = *it;
+                    if (!ent->isA(LabelEntry_kind)) break;
+
+                    lbls.push_back(node_cast<LabelEntry>(ent));
+                    it++;
+                } while (it != asm_entries.end());
+
+                VirtualAddr vaddr;
+                if (it != asm_entries.end())
+                    vaddr = (*it)->virtual_addr;
+                else
+                    vaddr = curr_section == Asm::Section::Code? cst.vi_addr : cst.vd_addr;
+
+                for (auto lbl : lbls)
+                    lbl->virtual_addr = vaddr;
+
+                break;
+            }
+            default:
+                break;
+        }
+        it++;
+    }
+
+    // Resolve global labels
+    for (const auto& lblp : global_lbl_v)
+    {
+        auto itl = local_lbl.find(lblp.first);
+        if (itl == local_lbl.end())
+        {
+            throw EAsm::Error(EAsm::SrcInfo{ getFilename(), lblp.second },
+                       "Label ", cboldText(fcolor::red, lblp.first),
+                       " is declared as global but is not defined in the program\n");
+        }
+
+        auto itg = cst.global_lbl.find(lblp.first);
+        if (itg != cst.global_lbl.end())
+        {
+            throw EAsm::Error(EAsm::SrcInfo{ getFilename(), lblp.second },
+                       "Global label ", cboldText(fcolor::red, lblp.first),
+                       " duplicated. Previuos declaration is in ",
+                       colorText(fcolor::green, itg->second->getFilename()),
+                       ":", colorText(fcolor::yellow, itg->second->getLinenum()),
+                       '\n');
+        }
+        cst.global_lbl.emplace(lblp.first, itl->second);
+    }
+}
+// End of resolveLabels operation
+
+// compile operation
+compile(AsmProgram)
+{
+    gdata.init(cst.data_size);
+    for (const auto aent : asm_entries)
+    {
+        auto vm_oper = compileEntry(aent, this, cst, nodeSrcInfo(aent));
+
+        if (vm_oper)
+            vmoper_v.push_back(*vm_oper);
+    }
+}
+// End of compile operation
+
+// compileEntry operation
+compileEntry(LabelEntry)
+{ return std::nullopt; }
+
+compileEntry(Directive) 
+{ return std::nullopt; }
+
+compileEntry(EmptyStmt)
+{ return std::nullopt; }
+
+compileEntry(ByteData)
+{ 
+    compileDataArg(n_entry->n_args, prg, cst, 8);
+
+    return std::nullopt;
+}
+
+compileEntry(HWordData)
+{
+    prg->gdata.align(2);
+    compileDataArg(n_entry->n_args, prg, cst, 16);
+
+    return std::nullopt;
+}
+
+compileEntry(WordData)
+{
+    prg->gdata.align(4);
+    compileDataArg(n_entry->n_args, prg, cst, 32);
+
+    return std::nullopt;
+}
+
+compileEntry(Inst)
+{
+    const InstInfo *inst_info = Asm::getInstInfo(n_entry->name);
+
+    if (inst_info == nullptr)
+    {
+        throw EAsm::Error(nodeSrcInfo(n_entry),
+                          "Invalid instruction ",
+                          cboldText(fcolor::red, n_entry->name), '\n');
+    }
+    unsigned prov_arg_count = n_entry->n_args->argCount();
+    unsigned exp_arg_count = inst_info->sig.arg_count;
+
+    if (prov_arg_count != exp_arg_count)
+    {
+        throw EAsm::Error(nodeSrcInfo(n_entry),
+                          "Invalid number of arguments in intruction ",
+                          cboldText(fcolor::blue, n_entry->name), ", expected ",
+                          cboldText(fcolor::yellow, exp_arg_count),
+                          ", but found ", cboldText(fcolor::yellow, prov_arg_count), '\n');
+    }
+
+    std::vector<uint32_t> arg_vals;
+
+    if (exp_arg_count > 0)
+    {
+        ArgList *arg_list = node_cast<ArgList>(n_entry->n_args);
+        const ArgVector& args = arg_list->args;
+
+        static const char *str_idx[] = {"First", "Second", "Third"};
+
+        const ArgType *arg_type = &inst_info->sig.arg0;
+
+        for (int i = 0; i < args.size(); i++)
+        {
+            Asm::Arg arg_val = compileArg(args[i], prg, cst);
+            switch (arg_type[i])
+            {
+                case ArgType::Reg:
+                {
+                    if (!args[i]->isA(Reg_kind))
+                    {
+                        throw EAsm::Error(nodeSrcInfo(n_entry),
+                                          str_idx[i], " argument of instruction ",
+                                          cboldText(fcolor::blue, n_entry->name),
+                                          " should be a register\n");
+                    }
+                    arg_vals.push_back(arg_val.reg().index());
+                    break;
+                }
+                case ArgType::Imm:
+                {
+                    if (!args[i]->isA(Immediate_kind))
+                    {
+                        throw EAsm::Error(nodeSrcInfo(n_entry),
+                                          str_idx[i], " argument of instruction ",
+                                          cboldText(fcolor::blue, n_entry->name),
+                                          " should be a immediate value or label\n");
+                    }
+                    uint32_t val = node_cast<Immediate>(args[i])->getImmValue(prg, cst);
+                    arg_vals.push_back(arg_val.imm());
+                    break;
+                }
+                case ArgType::BaseOfs:
+                {
+                    if (!args[i]->isA(BaseOffset_kind))
+                    {
+                        throw EAsm::Error(nodeSrcInfo(n_entry),
+                                          str_idx[i], " argument of instruction ",
+                                          cboldText(fcolor::blue, n_entry->name),
+                                          " should be offset(base) form\n");
+                    }
+                    const Asm::Arg::BaseOffset& bo = arg_val.baseOffset();
+                    if (!bo.hasBaseReg())
+                    {
+                        throw EAsm::Error(nodeSrcInfo(n_entry),
+                                          str_idx[i], " argument of instruction ",
+                                          cboldText(fcolor::blue, n_entry->name),
+                                          " should use a register as base\n");
+                    }
+                    arg_vals.push_back(bo.offset());
+                    arg_vals.push_back(bo.baseReg().index());
+                    break;
+                }
+                default:
+                    ;
+            }
+        }
+    }
+
+    VmOperation vm_oper(n_entry->getFilename(), n_entry->getLinenum());
+    vm_oper.task = Asm::compileInst(inst_info->opcode, arg_vals, src_info);
+
+    return vm_oper;
+}
+
+compileEntry(ShowCmd)
+{
+    if (!n_entry->n_sep->isA(Const_kind)
+        && !n_entry->n_sep->isA(StrLiteral_kind)
+        && !n_entry->n_sep->isA(EmptyArg_kind))
+    {
+        throw EAsm::Error(nodeSrcInfo(n_entry),
+                          colorText(fcolor::red, n_entry->n_sep->toString()),
+                          " is not a valid expression separator in ",
+                          cboldText(fcolor::blue, "#show"),
+                          " command\n");
+    }
+
+    std::string sep = "";
+
+    if (n_entry->n_sep->isA(Const_kind))
+    {
+        unsigned val = node_cast<Immediate>(n_entry->n_sep)->getImmValue(prg, cst);
+        sep += static_cast<char>(val);
+    }
+    else if (n_entry->n_sep->isA(StrLiteral_kind))
+        sep = node_cast<StrLiteral>(n_entry->n_sep)->s_val;
+
+    VmOperation vm_oper(n_entry->getFilename(), n_entry->getLinenum());
+
+    TaskFunction tsk_func = compileShowCmd(n_entry->n_arg, sep, n_entry->fmt, prg, cst, src_info);
+
+    vm_oper.task = [tsk_func](RuntimeContext& ctx)
+    {
+        auto ecode = tsk_func(ctx);
+        ctx.out << '\n';
+
+        return ecode;
+    };
+
+    return vm_oper;
+}
+
+compileEntry(SetCmd)
+{
+    VmOperation vm_oper(n_entry->getFilename(), n_entry->getLinenum());
+
+    vm_oper.task = compileSetCmd(n_entry->n_larg, n_entry->n_rarg, prg, cst, src_info);
+    
+    return vm_oper;
+}
+
+compileEntry(ExecCmd)
+{
+   throw EAsm::Error(nodeSrcInfo(n_entry),
+                     cboldText(fcolor::blue, "#exec"),
+                     " command is only available in interactive mode\n");
+}
+
+compileEntry(ResetCmd)
+{
+   throw EAsm::Error(nodeSrcInfo(n_entry),
+                     cboldText(fcolor::blue, "#reset"),
+                     " command is only available in interactive mode\n");
+}
+
+compileEntry(StopCmd)
+{
+    VmOperation vm_oper(n_entry->getFilename(), n_entry->getLinenum());
+
+    vm_oper.task = [](RuntimeContext& ctx)
+    { return ErrorCode::Stop; };
+
+    return vm_oper;
+}
+// End of compileEntry operation
+
+//getDataArgSize operation
+getDataArgSize(ConstDataArg)
+{ return word_size / 8; }
+
+getDataArgSize(StrLiteralDataArg)
+{ return arg->s_val.length() * (word_size / 8); }
+
+getDataArgSize(FillDataArg)
+{
+    uint32_t count = arg->n_repeat->getConstDataArgValue();
+
+    return count * (word_size / 8);
+}
+
+getDataArgSize(DataArgList)
+{
+    unsigned size = 0;
+
+    for (const auto arg : arg->args)
+        size += getDataArgSize(arg, word_size);
+
+    return size;
+}
+//End of getDataArgSize operation
+
+// compileDataArg operation
+compileDataArg(ConstDataArg)
+{
+    uint32_t val = arg->getConstDataArgValue();
+
+    switch (word_size)
+    {
+        case 8:
+            prg->gdata.writeByte(static_cast<uint8_t>(val));
+            break;
+        case 16:
+            prg->gdata.writeHWord(static_cast<uint16_t>(val));
+            break;
+        default:
+            prg->gdata.writeWord(static_cast<uint32_t>(val));
+            break;
+    }
+}
+
+compileDataArg(StrLiteralDataArg)
+{
+    for (char ch : arg->s_val)
+    {
+        switch (word_size)
+        {
+            case 8:
+                prg->gdata.writeByte(static_cast<uint8_t>(ch));
+                break;
+            case 16:
+                prg->gdata.writeHWord(static_cast<uint16_t>(ch));
+                break;
+            default:
+                prg->gdata.writeWord(static_cast<uint32_t>(ch));
+                break;
+        }
+    }
+}
+
+compileDataArg(FillDataArg)
+{
+    uint32_t val = arg->n_val->getConstDataArgValue();
+    uint32_t count = arg->n_repeat->getConstDataArgValue();
+
+    for (unsigned i = 0; i < count; i++)
+    {
+        switch (word_size)
+        {
+            case 8:
+                prg->gdata.writeByte(static_cast<uint8_t>(val));
+                break;
+            case 16:
+                prg->gdata.writeHWord(static_cast<uint16_t>(val));
+                break;
+            default:
+                prg->gdata.writeWord(static_cast<uint32_t>(val));
+                break;
+        }
+    }
+}
+
+compileDataArg(DataArgList)
+{
+    for (const auto arg : arg->args)
+        compileDataArg(arg, prg, cst, word_size);
+}
+// End of compileDataArg operation
+
+// getConstDataArgValue operation
+
+getConstDataArgValue(DecConstDataArg)
+{ return std::stol(s_val); }
+
+getConstDataArgValue(HexConstDataArg)
+{ return std::stoul(s_val, nullptr, 16); }
+
+getConstDataArgValue(BinConstDataArg)
+{ return std::stoul(&(s_val.c_str()[2]), nullptr, 2); }
+
+getConstDataArgValue(CharLiteralDataArg)
+{ return static_cast<uint32_t>(s_val[0]); }
+
+// End of getConstDataArgValue operation
+
+// compileShowCmd operation
+compileShowCmd(ArgList)
+{
+    unsigned size = n_arg->args.size();
+    std::vector<TaskFunction> task_v;
+
+    unsigned index = 0;
+    for (const auto n : n_arg->args)
+    {
+        auto src_info = nodeSrcInfo(n_arg);
+        auto task = compileShowCmd(n, sep, sfmt, prg, cst, src_info);
+        
+        task_v.push_back(task);
+    }
+
+    return [sep, task_v{std::move(task_v)}](RuntimeContext& ctx)
+    {
+        bool first = true;
+        for (auto const& task_func : task_v)
+        {
+            if (first)
+                first = false;
+            else
+                ctx.out << sep;
+
+            ErrorCode ecode = task_func(ctx);
+
+            if (ecode != ErrorCode::Ok)
+                return ecode;
+        }
+
+        return ErrorCode::Ok;
+    };
+}
+
+compileShowCmd(EmptyArg)
+{
+    return [](RuntimeContext&)
+    { 
+        return ErrorCode::Ok; 
+    };
+}
+
+compileShowCmd(Reg)
+{
+    std::string reg_name = n_arg->toString();
+    unsigned reg_idx = n_arg->getRegIndex();
+    Cvt::Format fmt = getCvtFormat(sfmt);
+
+    return [reg_name, reg_idx, fmt](RuntimeContext& ctx)
+    {
+        ctx.out << colorText(fcolor::green, reg_name)
+                << " = "
+                << colorText(fcolor::yellow, Cvt::FmtVal(static_cast<uint32_t>(ctx.reg_file[reg_idx]), fmt));
+
+        return ErrorCode::Ok;
+    };
+}
+
+compileShowCmd(MemRef)
+{
+    Asm::Arg arg_mr = compileArg(n_arg, prg, cst);
+    const Asm::Arg::MemAddrExpr& mr = arg_mr.memAddrExpr();
+    Cvt::Format fmt = getCvtFormat(sfmt);
+
+    std::function<void(RuntimeContext&, VirtualAddr)> show_vals;
+    std::string elem_sep = sep.empty()? " " : sep;
+
+    switch (mr.wordSize())
+    {
+        case WordSize::_8Bit:
+        {
+            show_vals = [fmt, wcount{mr.wordCount()}, elem_sep](RuntimeContext& ctx, VirtualAddr vaddr)
+            {
+                ctx.out << colorText(fcolor::green, "byte")
+                        << '(' << colorText(fcolor::cyan, Cvt::hexVal(vaddr)) << ")";
+
+                if (wcount > 1) {
+                    ctx.out << ":" << colorText(fcolor::cyan, wcount);
+                }
+
+                ctx.out << " =";
+
+                auto it = ctx.mm->memIter<uint8_t>(vaddr);
+                bool first = true;
+
+                for (size_t i = 0; i < wcount; i++, it++)
+                {
+                    if (first) {
+                        first = false;
+                        ctx.out << ' ';
+                    }
+                    else
+                        ctx.out << elem_sep;
+
+                    ctx.out << colorText(fcolor::yellow, Cvt::FmtVal(*it, fmt));
+                }
+            };
+            break;
+        }
+        case WordSize::_16Bit:
+        {
+            show_vals = [fmt, wcount{mr.wordCount()}, elem_sep](RuntimeContext& ctx, VirtualAddr vaddr)
+            {
+                ctx.out << colorText(fcolor::green, "hword")
+                        << '(' << colorText(fcolor::cyan, Cvt::hexVal(vaddr)) << ")";
+
+                if (wcount > 1) {
+                    ctx.out << ":" << colorText(fcolor::cyan, wcount);
+                }
+
+                ctx.out << " =";
+
+                auto it = ctx.mm->memIter<uint16_t>(vaddr);
+                bool first = true;
+
+                for (size_t i = 0; i < wcount; i++, it++)
+                {
+                    if (first) {
+                        first = false;
+                        ctx.out << ' ';
+                    }
+                    else
+                        ctx.out << elem_sep;
+
+                    ctx.out << colorText(fcolor::yellow, Cvt::FmtVal(*it, fmt));
+                }
+            };
+            break;
+        }
+        default:
+        {
+            show_vals = [fmt, wcount{mr.wordCount()}, elem_sep](RuntimeContext& ctx, VirtualAddr vaddr)
+            {
+                ctx.out << colorText(fcolor::green, "word")
+                        << '(' << colorText(fcolor::cyan, Cvt::hexVal(vaddr)) << ")";
+
+                if (wcount > 1) {
+                    ctx.out << ":" << colorText(fcolor::cyan, wcount);
+                }
+
+                ctx.out << " =";
+
+                auto it = ctx.mm->memIter<uint32_t>(vaddr);
+                bool first = true;
+
+                for (size_t i = 0; i < wcount; i++, it++)
+                {
+                    if (first) {
+                        first = false;
+                        ctx.out << ' ';
+                    }
+                    else
+                        ctx.out << elem_sep;
+
+                    ctx.out << colorText(fcolor::yellow, Cvt::FmtVal(*it, fmt));
+                }
+            };
+            break;
+        }
+    }
+
+    return [mr, show_vals, src_info{src_info}](RuntimeContext& ctx)
+    {
+        VirtualAddr vaddr = mr.value(ctx);
+
+        auto res = ctx.validateAddr(vaddr, mr.wordCount(), mr.wordSize());
+        if (res.err_code != ErrorCode::Ok)
+        {
+            ctx.last_error = EAsm::Error(src_info, std::move(res.err_info),
+                                         " on ", cboldText(fcolor::blue, "#show"), " command\n");
+            return res.err_code;
+        }
+        show_vals(ctx, vaddr);
+
+        return ErrorCode::Ok;
+    };
+}
+
+compileShowCmd(BaseOffset)
+{
+    throw EAsm::Error(src_info,
+                      cboldText(fcolor::blue, "#show"),
+                      " command doesn't have word size specified (",
+                      cboldText(fcolor::cyan, "byte"), ", ",
+                      cboldText(fcolor::cyan, "hword"), " or ",
+                      cboldText(fcolor::cyan, "word"),
+                      ") in expression ",
+                      cboldText(fcolor::red, n_arg->toString()), '\n');
+}
+
+compileShowCmd(StrLiteral)
+{
+    return [s_val{n_arg->s_val}](RuntimeContext& ctx)
+    {
+        ctx.out << s_val;
+        return ErrorCode::Ok;
+    };
+}
+
+compileShowCmd(Immediate)
+{
+    uint32_t val = n_arg->getImmValue(prg, cst);
+    Cvt::Format fmt = getCvtFormat(sfmt);
+
+    return [val, fmt](RuntimeContext& ctx)
+    {
+        ctx.out << Cvt::FmtVal(val, fmt);
+        return ErrorCode::Ok;
+    };
+}
+
+compileShowCmd(CharLiteral)
+{
+    uint32_t val = n_arg->s_val[0];
+    Cvt::Format fmt = (sfmt == Fmt_Auto)? Cvt::Format::Ascii : getCvtFormat(sfmt);
+
+    return [val, fmt](RuntimeContext& ctx)
+    {
+        ctx.out << Cvt::FmtVal(val, fmt);
+        return ErrorCode::Ok;
+    };
+}
+
+compileShowCmd(Ident)
+{
+    uint32_t val = n_arg->getImmValue(prg, cst);
+    Cvt::Format fmt = (sfmt == Fmt_Auto)? Cvt::Format::Hex : getCvtFormat(sfmt);
+
+    return [ident{n_arg->s_val}, val, fmt](RuntimeContext& ctx)
+    {
+        ctx.out << colorText(fcolor::green, ident)
+                << " points to "
+                << colorText(fcolor::yellow, Cvt::FmtVal(val, fmt));
+
+        return ErrorCode::Ok;
+    };
+}
+// End of compileShowCmd
+
+// compileSetCmd operation
+compileSetCmd(Arg, Arg)
+{
+    if (!n_argl->isA(Reg_kind)
+        && !n_argl->isA(MemRef_kind))
+    {
+        throw EAsm::Error(src_info,
+                          "Invalid argument ",
+                          cboldText(fcolor::red, n_argl->toString()),
+                          " on the left side of ",
+                          cboldText(fcolor::blue, "#set"),
+                          " command\n");
+    }
+    else
+    {
+        throw EAsm::Error(src_info,
+                          "Invalid expression ",
+                          cboldText(fcolor::red, n_argr->toString()),
+                          " on the right side of ",
+                          cboldText(fcolor::blue, "#set"),
+                          " command\n");
+    }
+
+    return nullptr;
+}
+
+compileSetCmd(Reg, Reg)
+{
+    unsigned idx2 = n_argr->getRegIndex();
+    unsigned idx1 = n_argl->getRegIndex();
+
+    return [idx1, idx2](RuntimeContext& ctx)
+    {
+        ctx.reg_file.setReg(idx1, ctx.reg_file[idx2]);
+        return ErrorCode::Ok;
+    };
+}
+
+compileSetCmd(Reg, Immediate)
+{
+    uint32_t imm = n_argr->getImmValue(prg, cst);
+    unsigned ridx = n_argl->getRegIndex();
+
+    return [ridx, imm](RuntimeContext& ctx)
+    {
+        ctx.reg_file.setReg(ridx, imm);
+        return ErrorCode::Ok;
+    };
+}
+
+compileSetCmd(Reg, BaseOffset),
+compileSetCmd(Reg, MemRef)
+{
+    Asm::Arg argr = compileArg(n_argr, prg, cst);
+    unsigned ridx = n_argl->getRegIndex();
+
+    Asm::Arg::MemAddrExpr maddr = [&argr]()
+    {
+        if (argr.isBaseOffset())
+            return Asm::Arg::MemAddrExpr(WordSize::_32Bit, argr.baseOffset());
+        else
+            return argr.memAddrExpr();
+    }();
+
+    return [ridx, maddr, src_info{src_info}](RuntimeContext& ctx)
+    {
+        VirtualAddr vaddr = maddr.value(ctx);
+
+        auto res = ctx.validateAddr(vaddr, maddr.wordCount(), maddr.wordSize());
+        if (res.err_code != ErrorCode::Ok)
+        {
+            ctx.last_error = EAsm::Error(src_info, std::move(res.err_info),
+                                         " on right side of ", cboldText(fcolor::blue, "#set"),
+                                         " command\n");
+            return res.err_code;
+        }
+
+        switch (maddr.wordSize())
+        {
+            case WordSize::_8Bit:
+            {
+                auto it = ctx.mm->memIter<uint8_t>(vaddr);
+                ctx.reg_file.setReg(ridx, static_cast<uint8_t>(*it));
+                break;
+            }
+            case WordSize::_16Bit:
+            {
+                auto it = ctx.mm->memIter<uint16_t>(vaddr);
+                ctx.reg_file.setReg(ridx, static_cast<uint16_t>(*it));
+                break;
+            }
+            default:
+            {
+                auto it = ctx.mm->memIter<uint32_t>(vaddr);
+                ctx.reg_file.setReg(ridx, *it);
+                break;
+            }
+        }
+
+        return ErrorCode::Ok;
+    };
+}
+
+compileSetCmd(MemRef, Reg)
+{
+    Asm::Arg argl = compileArg(n_argl, prg, cst);
+    const Asm::Arg::MemAddrExpr& maddrl = argl.memAddrExpr();
+    unsigned ridx = n_argr->getRegIndex();
+
+    return [maddrl, ridx, src_info{src_info}] (RuntimeContext& ctx)
+    {
+        VirtualAddr vaddr = maddrl.value(ctx);
+        size_t wcount = maddrl.wordCount();
+
+        auto res = ctx.validateAddr(vaddr, wcount, maddrl.wordSize());
+        if (res.err_code != ErrorCode::Ok)
+        {
+            ctx.last_error = EAsm::Error(src_info, std::move(res.err_info),
+                                         " on left side of ", cboldText(fcolor::blue, "#set"),
+                                         " command\n");
+            return res.err_code;
+        }
+
+        switch (maddrl.wordSize())
+        {
+            case WordSize::_8Bit:
+            {
+                auto it = ctx.mm->memIter<uint8_t>(vaddr);
+                for (size_t i = 0; i < wcount; i++)
+                    *it++ = static_cast<uint8_t>(ctx.reg_file[ridx]);
+
+                break;
+            }
+            case WordSize::_16Bit:
+            {
+                auto it = ctx.mm->memIter<uint16_t>(vaddr);
+                for (size_t i = 0; i < wcount; i++)
+                    *it++ = static_cast<uint16_t>(ctx.reg_file[ridx]);
+
+                break;
+            }
+            default:
+            {
+                auto it = ctx.mm->memIter<uint32_t>(vaddr);
+                for (size_t i = 0; i < wcount; i++)
+                    *it++ = ctx.reg_file[ridx];
+
+                break;
+            }
+        }
+
+        return ErrorCode::Ok;
+    };
+}
+
+compileSetCmd(MemRef, Immediate)
+{
+    Asm::Arg argl = compileArg(n_argl, prg, cst);
+    const Asm::Arg::MemAddrExpr& maddrl = argl.memAddrExpr();
+    uint32_t imm = n_argr->getImmValue(prg, cst);
+
+    return [maddrl, imm, src_info{src_info}] (RuntimeContext& ctx)
+    {
+        VirtualAddr vaddr = maddrl.value(ctx);
+        size_t wcount = maddrl.wordCount();
+
+        auto res = ctx.validateAddr(vaddr, wcount, maddrl.wordSize());
+        if (res.err_code != ErrorCode::Ok)
+        {
+            ctx.last_error = EAsm::Error(src_info, std::move(res.err_info),
+                                         " on left side of ", cboldText(fcolor::blue, "#set"),
+                                         " command\n");
+            return res.err_code;
+        }
+
+        switch (maddrl.wordSize())
+        {
+            case WordSize::_8Bit:
+            {
+                auto it = ctx.mm->memIter<uint8_t>(vaddr);
+                for (size_t i = 0; i < wcount; i++)
+                    *it++ = static_cast<uint8_t>(imm);
+
+                break;
+            }
+            case WordSize::_16Bit:
+            {
+                auto it = ctx.mm->memIter<uint16_t>(vaddr);
+                for (size_t i = 0; i < wcount; i++)
+                    *it++ = static_cast<uint16_t>(imm);
+
+                break;
+            }
+            default:
+            {
+                auto it = ctx.mm->memIter<uint32_t>(vaddr);
+                for (size_t i = 0; i < wcount; i++)
+                    *it++ = imm;
+
+                break;
+            }
+        }
+        return ErrorCode::Ok;
+    };
+}
+
+compileSetCmd(MemRef, StrLiteral)
+{
+    Asm::Arg argl = compileArg(n_argl, prg, cst);
+    const Asm::Arg::MemAddrExpr& maddrl = argl.memAddrExpr();
+    std::string str = n_argr->s_val;
+
+    if (maddrl.wordCount(str.size()) != str.size())
+    {
+        throw EAsm::Error(src_info,
+                          "Size mismatch on ",
+                          cboldText(fcolor::blue, "#set"),
+                          " command. Left side has size ",
+                          cboldText(fcolor::yellow, argl.memAddrExpr().wordCount()),
+                          " and right side has size ",
+                          cboldText(fcolor::yellow, str.size()),
+                          '\n');
+    }
+
+    if (maddrl.wordSize() != WordSize::_8Bit)
+    {
+        throw EAsm::Error(src_info,
+                          "Right hand side of ",
+                          cboldText(fcolor::blue, "#set"),
+                          " command should have ",
+                          cboldText(fcolor::blue, "byte"),
+                          " size spec because right hand side is string literal\n");
+    }
+
+    return [maddrl, str, src_info{src_info}] (RuntimeContext& ctx)
+    {
+        VirtualAddr vaddr = maddrl.value(ctx);
+
+        auto res = ctx.validateAddr(vaddr, str.size(), WordSize::_8Bit);
+        if (res.err_code != ErrorCode::Ok)
+        {
+            ctx.last_error = EAsm::Error(src_info, std::move(res.err_info),
+                                         " on left side of ", cboldText(fcolor::blue, "#set"),
+                                         " command\n");
+            return res.err_code;
+        }
+
+        auto it = ctx.mm->memIter<char>(vaddr);
+        for (size_t i = 0; i < str.size(); i++)
+            *it++ = str[i];
+
+        return ErrorCode::Ok;
+    };
+}
+
+compileSetCmd(BaseOffset, BaseOffset),
+compileSetCmd(BaseOffset, MemRef),
+compileSetCmd(MemRef, BaseOffset),
+compileSetCmd(MemRef, MemRef)
+{
+    auto szSpec = [](Arg *n_arg)
+    {
+        if (n_arg->isA(BaseOffset_kind))
+            return SS_Empty;
+        else
+            return node_cast<MemRef>(n_arg)->sz_spec;
+    };
+
+    SizeSpec sz_specl = szSpec(n_argl);
+    SizeSpec sz_specr = szSpec(n_argr);
+
+    if ((sz_specl == sz_specr) && (sz_specr == SS_Empty))
+    {
+        throw EAsm::Error(src_info,
+                    cboldText(fcolor::blue, "#set"),
+                    " command doesn't have word size specified (",
+                    cboldText(fcolor::cyan, "byte"), ", ",
+                    cboldText(fcolor::cyan, "hword"), " or ",
+                    cboldText(fcolor::cyan, "word"),
+                    ")\n");
+    }
+
+    if (sz_specl == SS_Empty)
+        sz_specl = sz_specr;
+
+    if (sz_specr == SS_Empty)
+        sz_specr = sz_specl;
+
+    if (sz_specl != sz_specr)
+    {
+        std::string lss = sizeSpecToStr(sz_specl);
+        std::string rss = sizeSpecToStr(sz_specr);
+
+        throw EAsm::Error(src_info,
+                          "Size spec mismatch on ",
+                          cboldText(fcolor::blue, "#set"),
+                          " command. Left side has ",
+                          colorText(fcolor::red, lss),
+                          " and right side has ",
+                          colorText(fcolor::red, rss),
+                          '\n');
+    }
+
+    Asm::Arg argl = compileArg(n_argl, prg, cst);
+    Asm::Arg argr = compileArg(n_argr, prg, cst);
+
+    Asm::Arg::MemAddrExpr maddr1 = [&argl]()
+    {
+        if (argl.isBaseOffset())
+            return Asm::Arg::MemAddrExpr(WordSize::_32Bit, argl.baseOffset());
+        else
+            return argl.memAddrExpr();
+    }();
+
+    Asm::Arg::MemAddrExpr maddr2 = [&argr]()
+    {
+        if (argr.isBaseOffset())
+            return Asm::Arg::MemAddrExpr(WordSize::_32Bit, argr.baseOffset());
+        else
+            return argr.memAddrExpr();
+    }();
+
+    if (maddr1.wordCount(maddr2.wordCount()) != maddr2.wordCount(maddr1.wordCount()))
+    {
+        throw EAsm::Error(src_info,
+                          "Size mismatch on ",
+                          cboldText(fcolor::blue, "#set"),
+                          " command. Left side has size ",
+                          cboldText(fcolor::yellow, argl.memAddrExpr().wordCount()),
+                          " and right hand has size ",
+                          cboldText(fcolor::yellow, argr.memAddrExpr().wordCount()),
+                          '\n');
+    }
+
+    size_t wcount = std::max(maddr1.wordCount(), maddr2.wordCount());
+    std::function<void(RuntimeContext&, VirtualAddr, VirtualAddr)> set_vals;
+
+    switch (sz_specr)
+    {
+        case SS_Byte:
+        {
+            set_vals = [wcount](RuntimeContext& ctx, VirtualAddr daddr, VirtualAddr saddr)
+            {
+                auto itl = ctx.mm->memIter<uint8_t>(daddr);
+                auto itr = ctx.mm->memIter<uint8_t>(saddr);
+                for (size_t i = 0; i < wcount; i++)
+                    *itl++ = *itr++;
+            };
+            break;
+        }
+        case SS_HWord:
+        {
+            set_vals = [wcount](RuntimeContext& ctx, VirtualAddr daddr, VirtualAddr saddr)
+            {
+                auto itl = ctx.mm->memIter<uint16_t>(daddr);
+                auto itr = ctx.mm->memIter<uint16_t>(saddr);
+                for (size_t i = 0; i < wcount; i++)
+                    *itl++ = *itr++;
+            };
+            break;
+        }
+        default:
+        {
+            set_vals = [wcount](RuntimeContext& ctx, VirtualAddr daddr, VirtualAddr saddr)
+            {
+                auto itl = ctx.mm->memIter<uint32_t>(daddr);
+                auto itr = ctx.mm->memIter<uint32_t>(saddr);
+                for (size_t i = 0; i < wcount; i++)
+                    *itl++ = *itr++;
+            };
+            break;
+        }
+    }
+
+    return [maddr1, maddr2, wcount, set_vals, si{src_info}] (RuntimeContext& ctx)
+    {
+        VirtualAddr vsrc_addr = maddr2.value(ctx);
+
+        auto res1 = ctx.validateAddr(vsrc_addr, wcount, maddr2.wordSize());
+        if (res1.err_code != ErrorCode::Ok)
+        {
+            ctx.last_error = EAsm::Error(si, std::move(res1.err_info),
+                                         " on right side of ", cboldText(fcolor::blue, "#set"),
+                                         " command\n");
+
+            return res1.err_code;
+        }
+
+        VirtualAddr vdest_addr = maddr1.value(ctx);
+
+        auto res2 = ctx.validateAddr(vdest_addr, wcount, maddr1.wordSize());
+        if (res2.err_code != ErrorCode::Ok)
+        {
+            ctx.last_error = EAsm::Error(si, std::move(res2.err_info),
+                                         " on left side of ", cboldText(fcolor::blue, "#set"),
+                                         " command\n");
+
+            return res2.err_code;
+        }
+
+        set_vals(ctx, vdest_addr, vsrc_addr);
+
+        return ErrorCode::Ok;
+    };
+}
+
+compileSetCmd(MemRef, ArgList)
+{
+    Asm::Arg argl = compileArg(n_argl, prg, cst);
+    const Asm::Arg::MemAddrExpr& maddrl = argl.memAddrExpr();
+    const ArgVector& arg_v = n_argr->args;
+
+    std::vector<uint32_t> imm_v;
+    imm_v.reserve(arg_v.size());
+
+    for (const auto& n_arg : arg_v)
+    {
+        if (n_arg->isA(Immediate_kind))
+        {
+            uint32_t imm = node_cast<Immediate>(n_arg)->getImmValue(prg, cst);
+            imm_v.push_back(imm);
+        }
+        else if (n_arg->isA(StrLiteral_kind))
+        {
+            std::string str = node_cast<StrLiteral>(n_arg)->s_val;
+            for (char ch : str)
+                imm_v.push_back(static_cast<uint32_t>(ch));
+        }
+        else
+        {
+            throw EAsm::Error(src_info, "Argument ",
+                              cboldText(fcolor::red, n_arg->toString()),
+                              " is not valid in list. "
+                              "Only immediate values are allowed in list\n");
+        }
+    }
+
+    if (maddrl.wordCount(imm_v.size()) != imm_v.size())
+    {
+        throw EAsm::Error(src_info, "Size mismatch on ", cboldText(fcolor::blue, "#set"),
+                          " command. Left side has size ",
+                          cboldText(fcolor::yellow, argl.memAddrExpr().wordCount()),
+                          " and right side has size ",
+                          cboldText(fcolor::yellow, imm_v.size()), '\n');
+    }
+
+    return [maddrl, imm_v{std::move(imm_v)}, si{src_info}] (RuntimeContext& ctx)
+    {
+        VirtualAddr vaddr = maddrl.value(ctx);
+
+        auto res = ctx.validateAddr(vaddr, imm_v.size(), maddrl.wordSize());
+        if (res.err_code != ErrorCode::Ok)
+        {
+            ctx.last_error = EAsm::Error(si, std::move(res.err_info),
+                                         " on left side of ", cboldText(fcolor::blue, "#set"),
+                                         " command\n");
+
+            return res.err_code;
+        }
+
+        switch (maddrl.wordSize())
+        {
+            case WordSize::_8Bit:
+            {
+                auto itl = ctx.mm->memIter<uint8_t>(vaddr);
+                for (size_t i = 0; i < imm_v.size(); i++)
+                    *itl++ = imm_v[i];
+
+                break;
+            }
+            case WordSize::_16Bit:
+            {
+                auto itl = ctx.mm->memIter<uint16_t>(vaddr);
+                for (size_t i = 0; i < imm_v.size(); i++)
+                    *itl++ = imm_v[i];
+
+                break;
+            }
+            default:
+            {
+                auto itl = ctx.mm->memIter<uint32_t>(vaddr);
+                for (size_t i = 0; i < imm_v.size(); i++)
+                    *itl++ = imm_v[i];
+
+                break;
+            }
+        }
+        return ErrorCode::Ok;
+    };
+}
+// End of compileSetCmd operation
+
+// compileArg operation
+compileArg(EmptyArg)
+{ return Asm::Arg(); }
+
+compileArg(ArgList)
+{
+    Asm::Arg::Array arg_arr(n_arg->args.size());
+
+    size_t i = 0;
+    for (const auto n_argc : n_arg->args)
+    {
+        Asm::Arg arg = compileArg(n_argc, prg, cst);
+        new (&arg_arr[i]) Asm::Arg(std::move(arg));
+        i++;
+    }
+
+    return arg_arr;
+}
+
+compileArg(Reg)
+{
+    return Asm::Arg::Reg(n_arg->getRegIndex());
+}
+
+compileArg(MemRef)
+{
+    WordSize wsize = getWordSize(n_arg->sz_spec);
+
+    std::optional<size_t> osize;
+    if (n_arg->n_size->isA(Immediate_kind))
+    {
+        osize = node_cast<Immediate>(n_arg->n_size)->getImmValue(prg, cst);
+        if (osize == 0)
+        {
+            throw EAsm::Error(EAsm::SrcInfo{ n_arg->getFilename(), n_arg->getLinenum() },
+                              "Invalid size ", cboldText(fcolor::red, n_arg->n_size->toString()),
+                              " in expression ",
+                              cboldText(fcolor::yellow, n_arg->toString()), '\n');
+        }
+    }
+
+    if (!n_arg->n_addr->isA(BaseOffset_kind))
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ n_arg->getFilename(), n_arg->getLinenum() },
+                          "Argument ", cboldText(fcolor::red, n_arg->n_addr->toString()),
+                          " is not a valid address reference in expression ",
+                          cboldText(fcolor::yellow, n_arg->toString()), '\n');
+    }
+
+    Asm::Arg arg = compileArg(node_cast<Arg>(n_arg->n_addr), prg, cst);
+
+    return (osize)? Asm::Arg::MemAddrExpr(wsize, *osize, arg.baseOffset())
+                    : Asm::Arg::MemAddrExpr(wsize, arg.baseOffset());
+}
+
+compileArg(BaseOffset)
+{
+    if (!n_arg->n_base->isA(Reg_kind)
+        && !n_arg->n_base->isA(Immediate_kind))
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ n_arg->getFilename(), n_arg->getLinenum() },
+                          "Invalid argument ",
+                          cboldText(fcolor::red, n_arg->n_base->toString()),
+                          " in expression ",
+                          cboldText(fcolor::yellow, n_arg->toString()), '\n');
+    }
+    if (!n_arg->n_ofs->isA(Immediate_kind))
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ n_arg->getFilename(), n_arg->getLinenum() },
+                          "Argument ", cboldText(fcolor::red, n_arg->n_ofs->toString()),
+                          " should be an immediate value in expression ",
+                          cboldText(fcolor::yellow, n_arg->toString()), '\n');
+    }
+
+    Asm::Arg argb = compileArg(node_cast<Arg>(n_arg->n_base), prg, cst);
+    uint32_t ofs_val = node_cast<Immediate>(n_arg->n_ofs)->getImmValue(prg, cst);
+
+    if (argb.isReg())
+        return Asm::Arg::BaseOffset(ofs_val, argb.reg());
+    else
+        return Asm::Arg::BaseOffset(ofs_val, argb.imm());
+}
+
+compileArg(StrLiteral)
+{ return Asm::Arg(n_arg->s_val); }
+
+compileArg(Immediate)
+{ return Asm::Arg(n_arg->getImmValue(prg, cst)); }
+// End of compileArg
+
+// getCvtFormat operation
+getCvtFormat(Fmt_Hex)
+{ return Cvt::Format::Hex; }
+
+getCvtFormat(Fmt_Dec)
+{ return Cvt::Format::UDecimal; }
+
+getCvtFormat(Fmt_SDec)
+{ return Cvt::Format::SDecimal; }
+
+getCvtFormat(Fmt_UDec)
+{ return Cvt::Format::UDecimal; }
+
+getCvtFormat(Fmt_Bin)
+{ return Cvt::Format::Binary; }
+
+getCvtFormat(Fmt_Auto)
+{ return Cvt::Format::UDecimal; }
+
+getCvtFormat(Fmt_Ascii)
+{ return Cvt::Format::Ascii; }
+// End of getCvtFormat operation
+
+// getImmValue operation
+getImmValue(DecConst)
+{ return std::stol(s_val); }
+
+getImmValue(HexConst)
+{ return std::stoul(s_val, nullptr, 16); }
+
+getImmValue(BinConst)
+{ return std::strtoul(&(s_val.c_str()[2]), nullptr, 2); }
+
+getImmValue(CharLiteral)
+{ return static_cast<uint32_t>(s_val[0]); }
+
+getImmValue(HiHw)
+{
+    if (!n_arg->isA(Immediate_kind))
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ getFilename(), getLinenum() },
+                   cboldText(fcolor::blue, "#hihw"),
+                   " command expects a immediate argument. ",
+                   cboldText(fcolor::red, toString()),
+                   " does not fullfill that requirement\n");
+    }
+    uint32_t val = node_cast<Immediate>(n_arg)->getImmValue(prg, cst);
+
+    return (val >> 16);
+}
+
+getImmValue(LoHw)
+{
+    if (!n_arg->isA(Immediate_kind))
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ getFilename(), getLinenum() },
+                   cboldText(fcolor::blue, "#lohw"),
+                   " command expects a immediate argument. ",
+                   cboldText(fcolor::red, toString()),
+                   " does not fullfill that requirement\n");
+    }
+    uint32_t val = node_cast<Immediate>(n_arg)->getImmValue(prg, cst);
+
+    return (val & 0xffff);
+}
+
+getImmValue(Ident)
+{
+    auto it1 = prg->local_lbl.find(s_val);
+    if (it1 != prg->local_lbl.end())
+        return it1->second->virtual_addr;
+
+    auto it2 = cst.global_lbl.find(s_val);
+    if (it2 != cst.global_lbl.end())
+        return it2->second->virtual_addr;
+
+    throw EAsm::Error(nodeSrcInfo(this),
+               "Label ", cboldText(fcolor::red, s_val),
+               " has not been defined\n");
+}
+// End of getImmValue
+
+// getRegIndex operation
+getRegIndex(RegName)
+{
+    long idx = Asm::getRegIndex(name);
+    if (idx < 0)
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ getFilename(), getLinenum() },
+                   "Invalid register name : ",
+                   cboldText(fcolor::red, name),
+                   '\n');
+    }
+    return idx;
+}
+
+getRegIndex(RegIndex)
+{
+    size_t idx = std::stoul(s_index.substr(1));
+    if (idx > 31)
+    {
+        throw EAsm::Error(EAsm::SrcInfo{ getFilename(), getLinenum() },
+                   "Invalid register index : ",
+                   cboldText(fcolor::red, s_index),
+                   ". Valid range is 0 .. 31\n");
+    }
+    return idx;
+}
+// Enf of getRegIndex
+
+// operation argCount
+argCount(Arg)
+{ return 1; }
+
+argCount(EmptyArg)
+{ return 0; }
+
+argCount(ArgList)
+{ return args.size(); }
+// End of operation argCount

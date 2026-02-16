@@ -131,8 +131,8 @@ namespace Mips32::Assembler
                     uint32_t rd2 = ctx.reg_file[arg3];
                     uint32_t sum = rd1 + rd2;
 
-                    if ((rd1 & 0x80000000) == (rd2 & 0x80000000)
-                        && (rd1 & 0x80000000) != (sum & 0x80000000))
+                    if (!((rd1 ^ rd2) & 0x80000000)  // same sign
+                        && ((rd1 ^ sum) & 0x80000000)) // different result sign
                     {
                         ctx.last_error = EAsm::arithOvfError(si, "add",
                                                              static_cast<int32_t>(rd1),
@@ -157,8 +157,8 @@ namespace Mips32::Assembler
                     uint32_t rd2 = extend_cast<int16_t, uint32_t>(arg3);
                     uint32_t sum = rd1 + rd2;
 
-                    if ((rd1 & 0x80000000) == (rd2 & 0x80000000)
-                        && (rd1 & 0x80000000) != (sum & 0x80000000))
+                    if (!((rd1 ^ rd2) & 0x80000000) // same sign
+                        && ((rd1 ^ sum) & 0x80000000)) // different result sign
                     {
                         ctx.last_error = EAsm::arithOvfError(si, "addi",
                                                              static_cast<int32_t>(rd1),
@@ -180,11 +180,11 @@ namespace Mips32::Assembler
                 return [arg1, arg2, arg3, si{src_info}] (RuntimeContext& ctx)
                 {
                     uint32_t rd1 = ctx.reg_file[arg2];
-                    uint32_t rd2 = -ctx.reg_file[arg3];
-                    uint32_t sum = rd1 + rd2;
+                    uint32_t rd2 = ctx.reg_file[arg3];
+                    uint32_t sum = rd1 - rd2;
 
-                    if ((rd1 & 0x80000000) == (rd2 & 0x80000000)
-                        && (rd1 & 0x80000000) != (sum & 0x80000000))
+                    // Overflow if operands have different signs AND result has different sign than rd1
+                    if (((rd1 ^ rd2) & (rd1 ^ sum) & 0x80000000))
                     {
                         ctx.last_error = EAsm::arithOvfError(si, "sub",
                                                              static_cast<int32_t>(rd1),
@@ -229,13 +229,13 @@ namespace Mips32::Assembler
             case Opcode::Sll:
                 return [arg1, arg2, arg3](RuntimeContext& ctx)
                 {
-                    ctx.reg_file.setReg(arg1, ctx.reg_file[arg2] << arg3);
+                    ctx.reg_file.setReg(arg1, ctx.reg_file[arg2] << (arg3 & 0x1f));
                     return ErrorCode::Ok;
                 };
             case Opcode::Srl:
                 return [arg1, arg2, arg3](RuntimeContext& ctx)
                 {
-                    ctx.reg_file.setReg(arg1, ctx.reg_file[arg2] >> arg3);
+                    ctx.reg_file.setReg(arg1, ctx.reg_file[arg2] >> (arg3 & 0x1f));
                     return ErrorCode::Ok;
                 };
             case Opcode::Sra:
@@ -253,7 +253,7 @@ namespace Mips32::Assembler
                     uint32_t rd2 = ctx.reg_file[arg2];
                     uint32_t rd3 = ctx.reg_file[arg3];
                     
-                    ctx.reg_file.setReg(arg1, rd2 << rd3);
+                    ctx.reg_file.setReg(arg1, rd2 << (rd3 & 0x1f));
                     return ErrorCode::Ok;
                 };
             case Opcode::Srlv:
@@ -262,7 +262,7 @@ namespace Mips32::Assembler
                     uint32_t rd2 = ctx.reg_file[arg2];
                     uint32_t rd3 = ctx.reg_file[arg3];
 
-                    ctx.reg_file.setReg(arg1, rd2 >> rd3);
+                    ctx.reg_file.setReg(arg1, rd2 >> (rd3 & 0x1f));
                     return ErrorCode::Ok;
                 };
             case Opcode::Srav:
@@ -296,11 +296,21 @@ namespace Mips32::Assembler
                         int32_t dividend = static_cast<int32_t>(ctx.reg_file[arg1]);
                         int32_t divisor = static_cast<int32_t>(ctx.reg_file[arg2]);
 
-                        int32_t quotient = dividend / divisor;
-                        int32_t remainder = dividend % divisor;
+                        if (dividend == INT32_MIN && divisor == -1)
+                        {
+                            // Avoid SIGFPE on INT_MIN / -1
+                            // Result is undefined in MIPS, safe to ignore or set random
+                            ctx.reg_file.setLoReg(static_cast<uint32_t>(INT32_MIN));
+                            ctx.reg_file.setHiReg(0);
+                        }
+                        else
+                        {
+                            int32_t quotient = dividend / divisor;
+                            int32_t remainder = dividend % divisor;
 
-                        ctx.reg_file.setLoReg(quotient);
-                        ctx.reg_file.setHiReg(remainder);
+                            ctx.reg_file.setLoReg(quotient);
+                            ctx.reg_file.setHiReg(remainder);
+                        }
                     }
                     return ErrorCode::Ok;
                 };

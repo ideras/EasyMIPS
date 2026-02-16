@@ -159,8 +159,8 @@ Token Lexer::getNextToken() {
 }
 
 Lexer::Context::Context(std::istream& in): in(in) {
-    buff = new char[LEX_BUFF_SIZE + YYMAXFILL];
-    limit = buff + LEX_BUFF_SIZE;
+    buff.resize(LEX_BUFF_SIZE + YYMAXFILL);
+    limit = buff.data() + LEX_BUFF_SIZE;
     cur = limit;
     mark = limit;
     tok = limit;
@@ -171,18 +171,18 @@ Lexer::FillStatus Lexer::Context::fill(size_t need) {
     if (eof) {
         return FillStatus::Eof;
     }
-    const size_t free = tok - buff;
+    const size_t free = tok - buff.data();
     if (free < need) {
         return FillStatus::Error;
     }
-    memmove(buff, tok, limit - tok);
+    memmove(buff.data(), tok, limit - tok);
     limit -= free;
     cur -= free;
     mark -= free;
     tok -= free;
     in.read(limit, free);
     limit += in.gcount();
-    if (limit < buff + LEX_BUFF_SIZE) {
+    if (limit < buff.data() + LEX_BUFF_SIZE) {
         eof = true;
         memset(limit, 0, YYMAXFILL);
         limit += YYMAXFILL;

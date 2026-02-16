@@ -1,0 +1,35 @@
+# Build and Binary Directories
+build/
+build-*/
+bin/
+lib/
+out/
+
+# Dependency Directories
+_deps/
+
+# Project Generated Files
+mips32_lexer.cpp
+mips32_ast.cpp
+mips32_ast.h
+history.txt
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.clang-format
+
+# OS Specific Files
+.DS_Store
+Thumbs.db
+
+# Executables
+EasyMIPS
+EasyMIPS.exe
+test-*
+
+# AI Docs
+CLAUDE.md
+GEMINI.md

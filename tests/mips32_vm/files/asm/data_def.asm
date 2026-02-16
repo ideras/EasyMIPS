@@ -1,0 +1,10 @@
+.data
+    .byte "Hello World", 0xde, 0xad, 0xbe, 0xef, 10, 0
+    .word 0xdeadbeef, 0x00dec0de, "Hello"
+    .byte 0xde
+    .hword 0xdead,  0xbeef, "Hello", 0x00de, 0xc0de
+
+.text
+    #show byte (0x10000000):11 ascii
+    #show word (0x10000014) hex
+    #show word (0x1000001c):5 hex

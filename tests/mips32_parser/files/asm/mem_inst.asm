@@ -1,0 +1,31 @@
+lw $t0, $s0
+lw $t0, 4($s0)
+lw $t0, 0xffff0008
+
+lh $t0, $s0
+lh $t0, 4($s0)
+lh $t0, 0xffff0008
+
+lhu $t0, $s0
+lhu $t0, 4($s0)
+lhu $t0, 0xffff0008
+
+lb $t0, $s0
+lb $t0, 4($s0)
+lb $t0, 0xffff0008
+
+lbu $t0, $s0
+lbu $t0, 4($s0)
+lbu $t0, 0xffff0008
+
+sw $t0, $s0
+sw $t0, 4($s0)
+sw $t0, 0xffff0008
+
+sh $t0, $s0
+sh $t0, 4($s0)
+sh $t0, 0xffff0008
+
+sb $t0, $s0
+sb $t0, 4($s0)
+sb $t0, 0xffff0008

@@ -1,0 +1,4 @@
+$v0 = 0xdead0000
+$v0 = 0xdeadbeef
+$v0 = 0xdeadbeef
+$v0 = 0xdeadbeef

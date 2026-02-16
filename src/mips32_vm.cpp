@@ -238,6 +238,7 @@ namespace Mips32
             }
 
             ErrorCode ecode = act.task(*rt_ctx);
+            rt_ctx->reg_file.setReg(RegIndex::Pc, rt_ctx->pc);
             inst_count++;
 
             if (ecode == ErrorCode::Stop)

@@ -1,4 +1,5 @@
 #include <iostream>
+#include <algorithm>
 #include "num_convert.h"
 #include "mips32_runtime.h"
 

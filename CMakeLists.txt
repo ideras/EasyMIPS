@@ -59,6 +59,7 @@ add_custom_command (
 if (${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
     add_definitions(-D_WIN32_WINNT_VISTA=0x0600)
     add_definitions(-D_WIN32_WINNT=_WIN32_WINNT_VISTA)
+    add_definitions(-DNOMINMAX)
 endif()
 
 add_executable(EasyMIPS mips32_ast.cpp

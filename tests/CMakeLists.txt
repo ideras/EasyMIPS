@@ -40,14 +40,15 @@ target_include_directories(doctest INTERFACE ${DOCTEST_INCLUDE_DIR})
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/include/EasyMIPS)
+include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 add_library(mips32_lexer OBJECT mips32_lexer.cpp)
 
-add_library(mips32_parser OBJECT ${CMAKE_SOURCE_DIR}/src/mips32_parser.cpp)
+add_library(mips32_parser OBJECT ${CMAKE_SOURCE_DIR}/src/mips32_parser.cpp mips32_ast.h)
 
 add_library(easm_error OBJECT ${CMAKE_SOURCE_DIR}/src/easm_error.cpp)
 
-add_library(mips32_ast OBJECT mips32_ast.cpp)
+add_library(mips32_ast OBJECT mips32_ast.cpp mips32_ast.h)
 
 add_library(mips32_asm OBJECT   ${CMAKE_SOURCE_DIR}/src/mips32_runtime.cpp
                                 ${CMAKE_SOURCE_DIR}/src/mips32_assembler.cpp)
@@ -90,7 +91,7 @@ add_executable(test-mips32_parser   mips32_parser/mips32_parser_test.cpp
                                     $<TARGET_OBJECTS:mips32_ast>
                                     $<TARGET_OBJECTS:mips32_asm>)
 
-target_link_libraries(test-mips32_parser PRIVATE stdc++fs doctest)
+target_link_libraries(test-mips32_parser PRIVATE doctest)
 
 # MIPS32 Assembler test
 # =====================
@@ -112,7 +113,7 @@ add_executable(test-mips32_vm   mips32_vm/mips32_vm_test.cpp
                                 $<TARGET_OBJECTS:mips32_asm>
                                 ${CMAKE_SOURCE_DIR}/src/mips32_vm.cpp)
 
-target_link_libraries(test-mips32_vm PRIVATE stdc++fs doctest)
+target_link_libraries(test-mips32_vm PRIVATE doctest)
 
 if (${CMAKE_CXX_COMPILER_ID} MATCHES "GNU")
     foreach(TC IN LISTS TEST_CASES)

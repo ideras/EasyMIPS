@@ -631,7 +631,7 @@ compileShowCmd(MemRef)
                     else
                         ctx.out << elem_sep;
 
-                    ctx.out << colorText(fcolor::yellow, Cvt::FmtVal(*it, fmt));
+                    ctx.out << colorText(fcolor::yellow, Cvt::FmtVal(static_cast<uint32_t>(*it), fmt));
                 }
             };
             break;

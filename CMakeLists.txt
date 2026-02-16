@@ -61,7 +61,8 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
     add_definitions(-D_WIN32_WINNT=_WIN32_WINNT_VISTA)
 endif()
 
-add_executable(EasyMIPS  mips32_ast.cpp
+add_executable(EasyMIPS mips32_ast.cpp
+                        mips32_ast.h
                         mips32_lexer.cpp
                         src/mips32_parser.cpp
                         src/mips32_assembler.cpp

@@ -17,7 +17,7 @@ extern "C" ErrorCode handleSyscall(uint32_t *regs, void *mem, MemoryMap *mem_map
         default:
             if (v0 > 20 && v0 <= 50)
             {
-                std::cout << "Syscall: " << v0 << '\n' << std::flush;
+                std::cout << "Hello from C++. Syscall: " << v0 << '\n' << std::flush;
                 return ErrorCode::Ok;
             }
             else
